@@ -1,104 +1,165 @@
 import os
-import pickle
-from zipfile import ZipFile
-from datetime import datetime
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from updater import download_binance_monthly_data, download_binance_daily_data
-from config import data_base_path, model_file_path
+from datetime import datetime, timedelta
+import numpy as np
+from sklearn import linear_model
+from config import data_base_path
+import random
+import requests
+import retrying
+from sklearn.svm import SVR
 
+forecast_price = {}
 
 binance_data_path = os.path.join(data_base_path, "binance/futures-klines")
-training_price_data_path = os.path.join(data_base_path, "eth_price_data.csv")
+MAX_DATA_SIZE = 400  # Giới hạn số lượng dữ liệu tối đa khi lưu trữ
+INITIAL_FETCH_SIZE = 400  # Số lượng nến lần đầu tải về
 
+@retrying.retry(wait_exponential_multiplier=1000, wait_exponential_max=10000, stop_max_attempt_number=5)
+def fetch_prices(symbol, interval="1m", limit=100, start_time=None, end_time=None):
+    try:
+        base_url = "https://fapi.binance.com"
+        endpoint = f"/fapi/v1/klines"
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit
+        }
+        if start_time:
+            params['startTime'] = start_time
+        if end_time:
+            params['endTime'] = end_time
 
-def download_data():
-    cm_or_um = "um"
-    symbols = ["ETHUSDT"]
-    intervals = ["1d"]
-    years = ["2020", "2021", "2022", "2023", "2024"]
-    months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
-    download_path = binance_data_path
-    download_binance_monthly_data(
-        cm_or_um, symbols, intervals, years, months, download_path
-    )
-    print(f"Downloaded monthly data to {download_path}.")
+        url = base_url + endpoint
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f'Failed to fetch prices for {symbol} from Binance API: {str(e)}')
+        raise e
+
+def download_data(token):
+    symbols = f"{token.upper()}USDT"
+    interval = "5m"
     current_datetime = datetime.now()
-    current_year = current_datetime.year
-    current_month = current_datetime.month
-    download_binance_daily_data(
-        cm_or_um, symbols, intervals, current_year, current_month, download_path
-    )
-    print(f"Downloaded daily data to {download_path}.")
+    download_path = os.path.join(binance_data_path, token.lower())
+    
+    # Đường dẫn file CSV để lưu trữ
+    file_path = os.path.join(download_path, f"{token.lower()}_5m_data.csv")
+    # file_path = os.path.join(data_base_path, f"{token.lower()}_price_data.csv")
 
+    # Kiểm tra xem file có tồn tại hay không
+    if os.path.exists(file_path):
+        # Tính thời gian bắt đầu cho 100 cây nến 5 phút
+        start_time = int((current_datetime - timedelta(minutes=500)).timestamp() * 1000)
+        end_time = int(current_datetime.timestamp() * 1000)
+        new_data = fetch_prices(symbols, interval, 100, start_time, end_time)
+    else:
+        # Nếu file không tồn tại, tải về số lượng INITIAL_FETCH_SIZE nến
+        start_time = int((current_datetime - timedelta(minutes=INITIAL_FETCH_SIZE*5)).timestamp() * 1000)
+        end_time = int(current_datetime.timestamp() * 1000)
+        new_data = fetch_prices(symbols, interval, INITIAL_FETCH_SIZE, start_time, end_time)
 
-def format_data():
-    files = sorted([x for x in os.listdir(binance_data_path)])
+    # Chuyển dữ liệu thành DataFrame
+    new_df = pd.DataFrame(new_data, columns=[
+        "start_time", "open", "high", "low", "close", "volume", "close_time",
+        "quote_asset_volume", "number_of_trades", "taker_buy_base_asset_volume", 
+        "taker_buy_quote_asset_volume", "ignore"
+    ])
 
-    # No files to process
-    if len(files) == 0:
+    # Kiểm tra và đọc dữ liệu cũ nếu tồn tại
+    if os.path.exists(file_path):
+        old_df = pd.read_csv(file_path)
+        # Kết hợp dữ liệu cũ và mới
+        combined_df = pd.concat([old_df, new_df])
+        # Loại bỏ các bản ghi trùng lặp dựa trên 'start_time'
+        combined_df = combined_df.drop_duplicates(subset=['start_time'], keep='last')
+    else:
+        combined_df = new_df
+
+    # Giới hạn số lượng dữ liệu tối đa
+    if len(combined_df) > MAX_DATA_SIZE:
+        combined_df = combined_df.iloc[-MAX_DATA_SIZE:]
+
+    # Lưu dữ liệu đã kết hợp vào file CSV
+    if not os.path.exists(download_path):
+        os.makedirs(download_path)
+    combined_df.to_csv(file_path, index=False)
+    print(f"Updated data for {token} saved to {file_path}. Total rows: {len(combined_df)}")
+
+def format_data(token):
+    path = os.path.join(binance_data_path, token.lower())
+    file_path = os.path.join(path, f"{token.lower()}_5m_data.csv")
+
+    if not os.path.exists(file_path):
+        print(f"No data file found for {token}")
         return
 
-    price_df = pd.DataFrame()
-    for file in files:
-        zip_file_path = os.path.join(binance_data_path, file)
+    df = pd.read_csv(file_path)
 
-        if not zip_file_path.endswith(".zip"):
-            continue
+    # Sử dụng các cột sau (đúng với dữ liệu bạn đã lưu)
+    columns_to_use = [
+        "start_time", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume"
+    ]
 
-        myzip = ZipFile(zip_file_path)
-        with myzip.open(myzip.filelist[0]) as f:
-            line = f.readline()
-            header = 0 if line.decode("utf-8").startswith("open_time") else None
-        df = pd.read_csv(myzip.open(myzip.filelist[0]), header=header).iloc[:, :11]
+    # Kiểm tra nếu tất cả các cột cần thiết tồn tại trong DataFrame
+    if set(columns_to_use).issubset(df.columns):
+        df = df[columns_to_use]
         df.columns = [
-            "start_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "end_time",
-            "volume_usd",
-            "n_trades",
-            "taker_volume",
-            "taker_volume_usd",
+            "start_time", "open", "high", "low", "close", "volume",
+            "end_time", "quote_asset_volume", "n_trades", 
+            "taker_volume", "taker_volume_usd"
         ]
-        df.index = [pd.Timestamp(x + 1, unit="ms") for x in df["end_time"]]
+        df.index = pd.to_datetime(df["start_time"], unit='ms')
         df.index.name = "date"
-        price_df = pd.concat([price_df, df])
 
-    price_df.sort_index().to_csv(training_price_data_path)
+        output_path = os.path.join(data_base_path, f"{token.lower()}_price_data.csv")
+        df.sort_index().to_csv(output_path)
+        print(f"Formatted data saved to {output_path}")
+    else:
+        print(f"Required columns are missing in {file_path}. Skipping this file.")
 
-
-def train_model():
-    # Load the eth price data
-    price_data = pd.read_csv(training_price_data_path)
+def train_model(token):
+    # Load the token price data
+    price_data = pd.read_csv(os.path.join(data_base_path, f"{token.lower()}_price_data.csv"))
     df = pd.DataFrame()
 
-    # Convert 'date' to a numerical value (timestamp) we can use for regression
-    df["date"] = pd.to_datetime(price_data["date"])
-    df["date"] = df["date"].map(pd.Timestamp.timestamp)
+    # Convert 'date' to datetime
+    price_data["date"] = pd.to_datetime(price_data["date"])
 
-    df["price"] = price_data[["open", "close", "high", "low"]].mean(axis=1)
+    # Set the date column as the index for resampling
+    price_data.set_index("date", inplace=True)
 
-    # Reshape the data to the shape expected by sklearn
-    x = df["date"].values.reshape(-1, 1)
-    y = df["price"].values.reshape(-1, 1)
+    # Resample the data to 10-minute frequency and compute the mean price
+    df = price_data.resample('10T').mean()
 
-    # Split the data into training set and test set
-    x_train, _, y_train, _ = train_test_split(x, y, test_size=0.2, random_state=0)
+    # Prepare data for Linear Regression
+    df = df.dropna()  # Loại bỏ các giá trị NaN (nếu có)
+    X = np.array(range(len(df))).reshape(-1, 1)  # Sử dụng chỉ số thời gian làm đặc trưng
+    y = df['close'].values  # Sử dụng giá đóng cửa làm mục tiêu
 
-    # Train the model
-    model = LinearRegression()
-    model.fit(x_train, y_train)
+     # Initialize and train the SVR model
+    model = SVR(kernel='rbf')
+    model.fit(X, y)
+    next_time_index = np.array([[len(df)]])
+    predicted_price = model.predict(next_time_index)[0]
 
-    # create the model's parent directory if it doesn't exist
-    os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
+    # fluctuation_range = 0.001 * predicted_price
+    # min_price = predicted_price - fluctuation_range
+    # max_price = predicted_price + fluctuation_range
+    # price_predict = random.uniform(min_price, max_price)
+    forecast_price[token] = predicted_price
+    #print(f"Predicted_price: {predicted_price}, Min_price: {min_price}, Max_price: {max_price}")
+    print(f"Forecasted price for {token}: {forecast_price[token]}")
 
-    # Save the trained model to a file
-    with open(model_file_path, "wb") as f:
-        pickle.dump(model, f)
+def update_data():
+    tokens = ["ETH", "BTC", "SOL", "BNB", "ARB"]
+    for token in tokens:
+        download_data(token)
+        format_data(token)
+        train_model(token)
 
-    print(f"Trained model saved to {model_file_path}")
+if __name__ == "__main__":
+    update_data()
