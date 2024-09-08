@@ -7,13 +7,13 @@ from config import data_base_path
 import random
 import requests
 import retrying
-from sklearn.svm import SVR
+from statsmodels.tsa.arima.model import ARIMA
 
 forecast_price = {}
 
 binance_data_path = os.path.join(data_base_path, "binance/futures-klines")
-MAX_DATA_SIZE = 400  # Giới hạn số lượng dữ liệu tối đa khi lưu trữ
-INITIAL_FETCH_SIZE = 400  # Số lượng nến lần đầu tải về
+MAX_DATA_SIZE = 1200  # Giới hạn số lượng dữ liệu tối đa khi lưu trữ
+INITIAL_FETCH_SIZE = 800  # Số lượng nến lần đầu tải về
 
 @retrying.retry(wait_exponential_multiplier=1000, wait_exponential_max=10000, stop_max_attempt_number=5)
 def fetch_prices(symbol, interval="1m", limit=100, start_time=None, end_time=None):
@@ -136,15 +136,25 @@ def train_model(token):
     df = price_data.resample('10T').mean()
 
     # Prepare data for Linear Regression
-    df = df.dropna()  # Loại bỏ các giá trị NaN (nếu có)
-    X = np.array(range(len(df))).reshape(-1, 1)  # Sử dụng chỉ số thời gian làm đặc trưng
-    y = df['close'].values  # Sử dụng giá đóng cửa làm mục tiêu
+    #df = df.dropna()  # Loại bỏ các giá trị NaN (nếu có)
+    #X = np.array(range(len(df))).reshape(-1, 1)  # Sử dụng chỉ số thời gian làm đặc trưng
+    #y = df['close'].values  # Sử dụng giá đóng cửa làm mục tiêu
 
      # Initialize and train the SVR model
-    model = SVR(kernel='rbf')
-    model.fit(X, y)
-    next_time_index = np.array([[len(df)]])
-    predicted_price = model.predict(next_time_index)[0]
+    #model = SVR(kernel='rbf')
+    #model.fit(X, y)
+    #next_time_index = np.array([[len(df)]])
+    #predicted_price = model.predict(next_time_index)[0]
+    df = df.dropna()  # Loại bỏ các giá trị NaN (nếu có)
+    y = df['close'].values  # Target: closing prices
+
+    # Initialize and fit the Exponential Smoothing model
+    model = ARIMA(y,order=(1, 1, 1))
+    #model = ExponentialSmoothing(y, trend="add", seasonal=None, seasonal_periods=12)
+    model_fit = model.fit()
+
+    forecast = model_fit.forecast(steps=1)
+    predicted_price = forecast[0]
 
     # fluctuation_range = 0.001 * predicted_price
     # min_price = predicted_price - fluctuation_range
