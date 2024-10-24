@@ -6,7 +6,7 @@
         "alloraHomeDir": "",
         "gas": "auto",
         "gasAdjustment": 5,
-        "nodeRpc": "http://45.92.11.222:26657/",
+        "nodeRpc": "https://faucet.testnet-1.testnet.allora.network/",
         "maxRetries": 7,
         "delay": 5,
         "submitTx": true
