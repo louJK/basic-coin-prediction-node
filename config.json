@@ -5,13 +5,11 @@
         "addressRestoreMnemonic": "seedphrase",
         "alloraHomeDir": "",
         "gas": "auto",
-        "gasAdjustment": 2.0,
-        "gasPrices": 0.1,
-        "maxFees": 250000,
+        "gasAdjustment": 5,
         "nodeRpc": "http://45.92.11.222:26657/",
         "maxRetries": 5,
-        "delay": 3,
-        "submitTx": true,
+        "delay": 5,
+        "submitTx": true
         "blockDurationEstimated": 10,
         "windowCorrectionFactor": 0.8
     },
