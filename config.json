@@ -9,7 +9,7 @@
         "nodeRpc": "https://allora-testnet-rpc.itrocket.net/",
         "maxRetries": 5,
         "delay": 5,
-        "submitTx": true
+        "submitTx": true,
         "blockDurationEstimated": 10,
         "windowCorrectionFactor": 0.8,
     },
