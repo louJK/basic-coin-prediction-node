@@ -11,7 +11,7 @@
         "delay": 5,
         "submitTx": true,
         "blockDurationEstimated": 10,
-        "windowCorrectionFactor": 0.8,
+        "windowCorrectionFactor": 0.8
     },
     "worker": [
         {
